@@ -121,9 +121,9 @@ const verPerfil = (req, res) => {
     });
 };
 
-// ⚠️ IMPORTANTE: Exportar las 3 funciones
 module.exports = { 
     registrarUsuario, 
     loginUsuario, 
-    verPerfil 
+    verPerfil,
+    userDB
 }; // Exporta la función para que pueda ser utilizada en las rutas de la aplicación
