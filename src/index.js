@@ -1,3 +1,4 @@
+const supabase = require('./config/supabase');
 const express = require('express');
 const app = express(); // Crear una instancia de la aplicación Express
 const PORT = 3000;

@@ -10,4 +10,6 @@ router.post('/transferir', transaccionController.transferirSaldo);
 
 router.get('/historial', transaccionController.obtenerHistorial);
 
+router.post('/config-tasa', transaccionController.configurarTasa);
+
 module.exports = router;

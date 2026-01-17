@@ -1,129 +1,114 @@
+const supabase = require('../config/supabase'); 
 const bcrypt = require('bcryptjs'); 
-// const usersDB = []; ...
 
-const userDB = require('../models/user.model'); // Importación del modelo de usuario
+// 1. REGISTRAR USUARIO (Adaptado a la FOTO de tu DB)
+const registrarUsuario = async (req, res) => {
+    try {
+        // Ahora pedimos Cédula y Tipo (Cliente/Chofer) porque tu DB los pide
+        const { nombre, email, password, cedula, tipo } = req.body; 
 
-// funcion para registrar un nuevo usuario (conectado a routes)
-//req: datos que envia el cliente
-//res: respuesta que envia el servidor
-const registrarUsuario = (req, res) => {
-    
-    //sacamos los datos del json que nos envian
-    const { nombre, email, password} = req.body;
+        if (!nombre || !email || !password || !cedula || !tipo) {
+            return res.status(400).json({ error: "Faltan datos (nombre, email, password, cedula, tipo)" });
+        }
 
-    //validamos
-    // si falta algun dato obligatorio, respondemos con un error 400
-    if (!nombre || !email || !password) {
-        return res.status(400).json({
-            error: "Faltan datos obligatorios",
-            mensaje : "Debes proporcionar nombre, email y contraseña"
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // AQUÍ ESTÁ LA MAGIA: Usamos los nombres exactos de la foto
+        const { data, error } = await supabase
+            .from('profiles')
+            .insert([
+                { 
+                    name: nombre,          // En la DB se llama 'name'
+                    email: email,          // En la DB se llama 'email'
+                    cedula: cedula,        // En la DB se llama 'cedula'
+                    user_type: tipo,       // En la DB se llama 'user_type'
+                    balance: 0,            // En la DB se llama 'balance'
+                    // OJO: Dile a tu compa que agregue esta columna 'password' a la tabla
+                    password: hashedPassword 
+                }
+            ])
+            .select();
+
+        if (error) {
+            console.error("Error Supabase:", error);
+            return res.status(400).json({ error: error.message });
+        }
+
+        res.status(201).json({
+            mensaje: "Usuario registrado EXITOSAMENTE",
+            usuario: data[0]
         });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Error interno del servidor" });
     }
-
-    const existe = userDB.find(user => user.email === email);
-    if (existe) {
-        return res.status(409).json({error : "El email ya está registrado"});
-    }
-
-    const passwordEncriptada = bcrypt.hashSync(password, 10); // Encriptar la contraseña
-
-    const nuevoUsuario = {
-        id: userDB.length + 1, // Generar un nuevo ID basado en la longitud del array (incremental)
-        nombre : nombre,
-        email : email,
-        password : passwordEncriptada,
-        saldo : 0.00 // Saldo inicial
-    }        
-
-    userDB.push(nuevoUsuario); // Agregar el nuevo usuario al array de usuarios
-
-    res.status(201).json({
-        mensaje: "Usuario registrado exitosamente",
-        datos: {
-            id: nuevoUsuario.id,
-            nombre: nuevoUsuario.nombre,
-            email: nuevoUsuario.email,
-            saldo: nuevoUsuario.saldo
-        }
-    });
-
 };
 
+// 2. LOGIN USUARIO (Adaptado a la FOTO)
+const loginUsuario = async (req, res) => {
+    try {
+        const { email, password } = req.body;
 
-//----- funcion para LOGIN de usuario ----------
-const loginUsuario = (req, res) => {
-    const { email, password } = req.body;
+        if (!email || !password) return res.status(400).json({ error: "Faltan datos" });
 
-    //validacion
-    const usuarioEncontrado = userDB.find(user => user.email === email);
+        const { data: usuario, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('email', email)
+            .single();
 
-    // Cuando el usuario no existe
-    if (!usuarioEncontrado) {
-        return res.status(404).json({error : "Usuario no encontrado"});
-    }
+        if (error || !usuario) {
+            return res.status(404).json({ error: "Usuario no encontrado" });
+        }
 
-    // Cuando faltan datos obligatorios
-    if (!email || !password) {
-        return res.status(400).json({
-            error: "Faltan datos obligatorios",
-            mensaje : "Debes proporcionar email y contraseña"
+        // Verificamos contraseña
+        const coinciden = await bcrypt.compare(password, usuario.password);
+
+        if (!coinciden) {
+            return res.status(401).json({ error: "Contraseña incorrecta" });
+        }
+
+        res.status(200).json({
+            mensaje: "Login exitoso",
+            usuarioId: usuario.id,
+            nombre: usuario.name,    // Ojo: ahora es usuario.name
+            cedula: usuario.cedula,  // Devolvemos la cédula también
+            balance: usuario.balance // Ojo: ahora es usuario.balance
         });
+
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Error interno del servidor" });
     }
-
-    // Cuando la contraseña es incorrecta
-    const passwordEsCorrecta = bcrypt.compareSync(password, usuarioEncontrado.password);
-
-    if (!passwordEsCorrecta) { // <--- Usamos el resultado de arriba
-        return res.status(401).json({ error: "Contraseña incorrecta" });
-    }
-
-    // 5. Respuesta Final (SOLO UNA)
-    // Si llegamos aquí, todo está bien.
-    res.status(200).json({
-        mensaje: "¡Bienvenido de nuevo!",
-        token: "token_falso_123", // Simulamos un token
-        datos: {
-            nombre: usuarioEncontrado.nombre,
-            saldo: usuarioEncontrado.saldo
-        }
-    });
-
 };
 
-    //-----------------------------------------
-    // GET (ver perfil de usuario)
-    //-----------------------------------------
+// 3. VER PERFIL (Adaptado a la FOTO)
+const verPerfil = async (req, res) => {
+    try {
+        const { id } = req.params;
 
-// ... (Aquí arriba están tus funciones de registrarUsuario y loginUsuario)
+        const { data: usuario, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', id)
+            .single();
 
-// 3. NUEVA FUNCIÓN: Ver Perfil
-const verPerfil = (req, res) => {
-    // Capturamos el ID de la URL y lo convertimos a número
-    const id = parseInt(req.params.id);
-
-    // Buscamos en el array
-    const usuarioEncontrado = userDB.find(user => user.id === id);
-
-    // Si no existe, devolvemos error 404
-    if (!usuarioEncontrado) {
-        return res.status(404).json({ error: "Usuario no encontrado" });
-    }
-
-    // Si existe, devolvemos los datos (SIN el password)
-    res.status(200).json({
-        mensaje: "Perfil encontrado",
-        datos: {
-            id: usuarioEncontrado.id,
-            nombre: usuarioEncontrado.nombre,
-            email: usuarioEncontrado.email,
-            saldo: usuarioEncontrado.saldo
+        if (error || !usuario) {
+            return res.status(404).json({ error: "Usuario no encontrado" });
         }
-    });
+
+        res.status(200).json({
+            nombre: usuario.name,
+            email: usuario.email,
+            cedula: usuario.cedula,
+            tipo: usuario.user_type,
+            balance: usuario.balance
+        });
+
+    } catch (err) {
+        res.status(500).json({ error: "Error interno" });
+    }
 };
 
-module.exports = { 
-    registrarUsuario, 
-    loginUsuario, 
-    verPerfil,
-    userDB
-}; // Exporta la función para que pueda ser utilizada en las rutas de la aplicación
+module.exports = { registrarUsuario, loginUsuario, verPerfil };
