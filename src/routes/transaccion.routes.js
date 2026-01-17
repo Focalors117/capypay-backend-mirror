@@ -8,4 +8,6 @@ const transaccionController = require('../controllers/transaccion.controller');
 router.post('/recargar', transaccionController.recargarSaldo);
 router.post('/transferir', transaccionController.transferirSaldo);
 
+router.get('/historial', transaccionController.obtenerHistorial);
+
 module.exports = router;

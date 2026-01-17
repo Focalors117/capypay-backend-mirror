@@ -1,5 +1,7 @@
 const userDB = require('../models/user.model'); 
 
+const transaccionesDB = require('../models/transaccion.model');
+
 //  Funcion para Recargar (meter dinero)
 const recargarSaldo = (req, res) => {
     const { usuarioId, monto } = req.body;
@@ -19,9 +21,20 @@ const recargarSaldo = (req, res) => {
     // sumamos 
     usuario.saldo += parseFloat(monto);
 
+    // funcion para registrar la transaccion (historial)
+    const nuevaTransaccion = {
+        id: transaccionesDB.length + 1,
+        tipo : 'RECARGA',
+        usuarioId : usuarioId,
+        monto : parseFloat(monto),
+        fecha : new Date().toISOString() // fecha y ora actual en formato ISO
+    };
+    transaccionesDB.push(nuevaTransaccion); // guardamos la transaccion
+
     res.status(200).json({
         mensaje: "Recarga exitosa",
-        nuevo_saldo: usuario.saldo
+        nuevo_saldo: usuario.saldo,
+        transaccion: nuevaTransaccion // devolvemos los datos de la transaccion
     });
 };
 
@@ -59,13 +72,39 @@ const transferirSaldo = (req, res) => {
     usuarioOrigen.saldo -= parseFloat(monto);
     usuarioDestino.saldo += parseFloat(monto);
 
+    const nuevaTransaccion = {
+        id: transaccionesDB.length + 1,
+        tipo: 'TRANSFERENCIA',
+        origenId: origenId,
+        destinoId: destinoId,
+        monto: parseFloat(monto),
+        fecha: new Date().toISOString()
+    };
+    transaccionesDB.push(nuevaTransaccion);
+
     res.status(200).json({
         mensaje: "Transferencia exitosa",
-        origen: usuarioOrigen.nombre,
-        destino: usuarioDestino.nombre,
-        monto_transferido: monto,
-        saldo_restante_origen: usuarioOrigen.saldo
+        transaccion: nuevaTransaccion
+    });
+
+};
+
+const obtenerHistorial = (req, res) => {
+    const { usuarioId} = req.query; // se pedira por url ?usuarioId=2
+
+    if (!usuarioId) return res.status(400).json({ error: "Falta el ID de usuario" });
+    
+    const historial = transaccionesDB.filter(t =>
+        t.usuarioId == usuarioId ||
+        t.origenId == usuarioId ||
+        t.destinoId == usuarioId
+    );
+
+    res.status(200).json({
+        mensaje: "Historial de transacciones",
+        cantidad: historial.length,
+        movimientos: historial
     });
 };
 
-module.exports = { recargarSaldo, transferirSaldo };
+module.exports = { recargarSaldo, transferirSaldo, obtenerHistorial };
