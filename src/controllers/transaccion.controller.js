@@ -1,5 +1,7 @@
 const supabase = require('../config/supabase'); 
 
+const bcrypt = require('bcryptjs'); // Importar bcrypt
+
 // ==========================================
 // 1. RECARGAR SALDO (Bolívares -> Dólares/Capys)
 // ==========================================
@@ -69,7 +71,29 @@ const recargarSaldo = async (req, res) => {
 // 2. TRANSFERIR SALDO (Entre Usuarios)
 // ==========================================
 const transferirSaldo = async (req, res) => {
-    const { emisor_id, cedula_receptor, monto, concepto } = req.body;
+    // recibimos 'pin' (opcional por ahora)
+    const { emisor_id, cedula_receptor, monto, concepto, pin } = req.body;
+
+    // --- VALIDACIÓN DE PIN ---
+    if (pin) {
+        // console.log(`[SEC] Verificando PIN para usuario ${emisor_id}: [REDACTED]`);
+        
+        const { data: userPin } = await supabase.from('profiles').select('pin').eq('id', emisor_id).single();
+        
+        if (userPin && userPin.pin) {
+             const pinValido = await bcrypt.compare(pin, userPin.pin);
+             if (!pinValido) {
+                 return res.status(403).json({ error: "PIN de seguridad incorrecto" });
+             } 
+             // Si el PIN es correcto, continuamos...
+        } else {
+            // Opcional: Si el usuario no tiene PIN configurado, ¿lo dejamos pasar o le exigimos configurarlo?
+            // Por ahora, si no tiene PIN en DB pero mandó uno, lo dejamos pasar o le avisamos.
+            // Para seguridad estricta: return res.status(400).json({ error: "Usuario sin PIN configurado" });
+            console.log("Advertencia: Usuario sin PIN configurado en DB, pero intentó usar uno.");
+        }
+    }
+
 
     if (!emisor_id || !cedula_receptor || !monto) {
         return res.status(400).json({ error: "Faltan datos" });
@@ -108,7 +132,7 @@ const transferirSaldo = async (req, res) => {
         // -----------------------------------------------------------------------------
 
         // D. Guardar Registro (Esto disparara el trigger de la DB)
-        const { data: transaccion } = await supabase
+        const { data: transaccion, error: errorTx } = await supabase
             .from('transactions')
             .insert([{
                 emisor_id: emisor.id,
@@ -119,10 +143,33 @@ const transferirSaldo = async (req, res) => {
             }])
             .select();
 
+        if (errorTx) {
+            console.error("Error al insertar transacción (posible error de trigger):", errorTx);
+            return res.status(400).json({ error: "Error en la transacción: " + (errorTx.message || "DB Error") });
+        }
+
+        const txData = transaccion ? transaccion[0] : null;
+
+        // --- NOTIFICACION (NUEVO) ---
+        if (txData) {
+             try {
+                 await supabase.from('notifications').insert([{
+                     user_id: receptor.id,
+                     type: 'payment_received',
+                     message: `Recibiste ${monto} Capys de ${emisor.name || 'Alguien'}`,
+                     related_id: txData.id,
+                     is_read: false
+                 }]);
+             } catch (notifError) {
+                 console.error("Error creating notification (Ignoring to not fail transaction):", notifError);
+             }
+        }
+        // -----------------------------
+
         res.status(200).json({
             mensaje: "Transferencia exitosa",
             nuevo_saldo_estimado: saldoEmisorRestante, // Esto es un estimado local
-            comprobante: transaccion[0]
+            comprobante: txData
         });
 
     } catch (err) {
@@ -158,19 +205,23 @@ const obtenerHistorial = async (req, res) => {
         // AHORA SÍ: Buscamos las transacciones con ese ID (Igual que antes)
         
         // A. Transacciones (Pagos y Cobros)
-        const { data: listaDePagos } = await supabase
+        const { data: listaDePagos, error: errPagos } = await supabase
             .from('transactions')
             .select('*')
             .or(`emisor_id.eq.${usuarioId},receptor_id.eq.${usuarioId}`);
 
+        if(errPagos) console.error("Error obteniendo transacciones:", errPagos);
+
         // B. Recargas
-        const { data: recargas } = await supabase
+        const { data: recargas, error: errRecargas } = await supabase
             .from('recharges')
             .select('*')
             .eq('perfil_id', usuarioId);
 
+        if(errRecargas) console.error("Error obteniendo recargas:", errRecargas);
+
         // C. Formatear y Unificar
-        const historialTxs = (listaDePagos| []).map(t => ({
+        const historialTxs = (listaDePagos || []).map(t => ({
             id: t.id,
             tipo: t.emisor_id === usuarioId ? 'PAGO ENVIADO' : 'PAGO RECIBIDO',
             monto: t.amount,
