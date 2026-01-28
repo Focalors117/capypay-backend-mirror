@@ -1,4 +1,6 @@
-const supabase = require('../config/supabase'); 
+const supabase = require('../config/supabase');
+const { exec } = require('child_process');
+const path = require('path');
 
 // ==========================================
 // 1. RECARGAR SALDO (Bolívares -> Dólares/Capys)
@@ -21,7 +23,7 @@ const recargarSaldo = async (req, res) => {
         if (!config) return res.status(500).json({ error: "Error de tasa" });
 
         const tasa = parseFloat(config.tasa_dolar);
-        const montoCapy = parseFloat(monto_bs) / tasa; 
+        const montoCapy = parseFloat(monto_bs) / tasa;
 
         // 2. BUSCAR USUARIO POR CÉDULA (La mejora)
         const { data: usuario, error: errorUser } = await supabase
@@ -64,68 +66,109 @@ const recargarSaldo = async (req, res) => {
 // ==========================================
 // 2. TRANSFERIR SALDO (Entre Usuarios)
 // ==========================================
-const transferirSaldo = async (req, res) => {
-    const { emisor_id, cedula_receptor, monto, concepto } = req.body;
+const { calcularComisionCpp } = require('../services/comisionService');
 
-    if (!emisor_id || !cedula_receptor || !monto) {
-        return res.status(400).json({ error: "Faltan datos" });
+const transferirSaldo = async (req, res) => {
+    // 1. Recibimos los datos del App
+    const { emisor_id, receptor_cedula, monto } = req.body;
+
+    // Validación básica
+    if (!emisor_id || !receptor_cedula || !monto || monto <= 0) {
+        return res.status(400).json({ error: "Faltan datos o el monto es inválido" });
     }
 
     try {
-        // A. Buscar Emisor (Quien paga)
-        const { data: emisor } = await supabase
+        // ---------------------------------------------------------
+        // PASO A: Obtener datos del EMISOR (Quien envía)
+        // ---------------------------------------------------------
+        const { data: emisor, error: errEmisor } = await supabase
             .from('profiles')
             .select('*')
             .eq('id', emisor_id)
             .single();
 
-        if (!emisor) return res.status(404).json({ error: "Emisor no encontrado" });
-        if (emisor.balance < monto) return res.status(400).json({ error: "Saldo insuficiente" });
+        if (errEmisor || !emisor) return res.status(404).json({ error: "Emisor no encontrado" });
 
-        // B. Buscar Receptor por CÉDULA
-        const { data: receptor } = await supabase
+        // ---------------------------------------------------------
+        // PASO B: Obtener datos del RECEPTOR (Quien recibe)
+        // ---------------------------------------------------------
+        // Buscamos por cédula (asumiendo que tienes una columna 'cedula' o 'dni')
+        const { data: receptor, error: errReceptor } = await supabase
             .from('profiles')
             .select('*')
-            .eq('cedula', cedula_receptor)
+            .eq('cedula', receptor_cedula)
             .single();
 
-        if (!receptor) return res.status(404).json({ error: "Destinatario no encontrado" });
-        if (emisor.id === receptor.id) return res.status(400).json({ error: "No puedes pagarte a ti mismo" });
+        if (errReceptor || !receptor) return res.status(404).json({ error: "Destinatario no encontrado" });
 
-        // C. Ejecutar Movimiento de Dinero
-        // Calculo esto solo en el JSON de respuesta (Visual),
-        // pero NO lo mandamos a guardar a la DB
-        const saldoEmisorRestante = parseFloat(emisor.balance) - parseFloat(monto);
-        
-        // --- EVITAMOS QUE NODEJS TOQUE EL SALDO PORQUE LA DB YA LO HACE ---
-        // await supabase.from('profiles').update({ balance: saldoEmisorRestante }).eq('id', emisor.id);
-        // const saldoReceptorNuevo = parseFloat(receptor.balance) + parseFloat(monto);
-        // await supabase.from('profiles').update({ balance: saldoReceptorNuevo }).eq('id', receptor.id);
-        // -----------------------------------------------------------------------------
 
-        // D. Guardar Registro (Esto disparara el trigger de la DB)
-        const { data: transaccion } = await supabase
-            .from('transactions')
-            .insert([{
-                emisor_id: emisor.id,
+        const tipoUsuario = emisor.user_type || 'comun';
+
+        console.log(`Calculando comisión con C++ para usuario: ${tipoUsuario}...`);
+        const comision = await calcularComisionCpp(monto, tipoUsuario);
+
+        const totalADescontar = parseFloat(monto) + comision;
+
+        console.log(`Monto: ${monto}, Comisión C++: ${comision}, Total: ${totalADescontar}`);
+
+        // ---------------------------------------------------------
+        // PASO D: Verificar si tiene saldo suficiente
+        // ---------------------------------------------------------
+        if (emisor.balance < totalADescontar) {
+            return res.status(400).json({
+                error: "Saldo insuficiente",
+                detalle: `Necesitas ${totalADescontar} (Incluye ${comision} de comisión)`
+            });
+        }
+
+        // ---------------------------------------------------------
+        // PASO E: Ejecutar la Transacción (Restar y Sumar)
+        // ---------------------------------------------------------
+
+        // 1. Restar al Emisor (Monto + Comisión)
+        const { error: errUpdateEmisor } = await supabase
+            .from('profiles')
+            .update({ balance: emisor.balance - totalADescontar })
+            .eq('id', emisor_id);
+
+        if (errUpdateEmisor) throw errUpdateEmisor;
+
+        // 2. Sumar al Receptor (Solo el Monto, la comisión se "quema")
+        const { error: errUpdateReceptor } = await supabase
+            .from('profiles')
+            .update({ balance: receptor.balance + parseFloat(monto) })
+            .eq('id', receptor.id);
+
+        if (errUpdateReceptor) throw errUpdateReceptor;
+
+        // 3. Guardar el registro en el historial (Opcional pero recomendado)
+        await supabase.from('transactions').insert([
+            {
+                emisor_id: emisor_id,
                 receptor_id: receptor.id,
                 amount: monto,
-                concept: concepto || "Transferencia",
-                category: "general"
-            }])
-            .select();
+                comision: comision, // Si tienes columna comisión, genial. Si no, quita esta línea.
+                concept: 'Transferencia entre usuarios',
+                category: 'transferencia'
+            }
+        ]);
 
+        // ---------------------------------------------------------
+        // PASO F: Responder éxito
+        // ---------------------------------------------------------
         res.status(200).json({
-            mensaje: "Transferencia exitosa",
-            nuevo_saldo_estimado: saldoEmisorRestante, // Esto es un estimado local
-            comprobante: transaccion[0]
+            mensaje: "Transferencia Exitosa ✅",
+            monto_enviado: monto,
+            comision_cbrada: comision,
+            saldo_restante: emisor.balance - totalADescontar
         });
 
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Error del servidor" });
+    } catch (error) {
+        console.error("Error en transferencia:", error);
+        res.status(500).json({ error: "Error procesando la transacción" });
     }
 };
+
 
 // ==========================================
 // 3. OBTENER HISTORIAL COMPLETO
@@ -135,7 +178,7 @@ const transferirSaldo = async (req, res) => {
 // ==========================================
 const obtenerHistorial = async (req, res) => {
     // AHORA: Recibimos 'cedula' por la URL en vez del ID raro
-    const { cedula } = req.query; 
+    const { cedula } = req.query;
 
     if (!cedula) return res.status(400).json({ error: "Falta la cédula en la URL (ej. ?cedula=V-1234)" });
 
@@ -152,7 +195,7 @@ const obtenerHistorial = async (req, res) => {
         const usuarioId = usuario.id; // ¡Aquí tenemos el ID que necesitamos!
 
         // AHORA SÍ: Buscamos las transacciones con ese ID (Igual que antes)
-        
+
         // A. Transacciones (Pagos y Cobros)
         const { data: listaDePagos } = await supabase
             .from('transactions')
@@ -166,13 +209,13 @@ const obtenerHistorial = async (req, res) => {
             .eq('perfil_id', usuarioId);
 
         // C. Formatear y Unificar
-        const historialTxs = (listaDePagos| []).map(t => ({
+        const historialTxs = (listaDePagos | []).map(t => ({
             id: t.id,
             tipo: t.emisor_id === usuarioId ? 'PAGO ENVIADO' : 'PAGO RECIBIDO',
             monto: t.amount,
             descripcion: t.concept,
             fecha: t.created_at,
-            es_negativo: t.emisor_id === usuarioId 
+            es_negativo: t.emisor_id === usuarioId
         }));
 
         const historialRecargas = (recargas || []).map(r => ({
@@ -181,7 +224,7 @@ const obtenerHistorial = async (req, res) => {
             monto: r.monto_capy,
             descripcion: `Recarga vía ${r.metodo_pago}`,
             fecha: r.created_at,
-            es_negativo: false 
+            es_negativo: false
         }));
 
         const historialCompleto = [...historialTxs, ...historialRecargas].sort((a, b) => {
@@ -212,10 +255,10 @@ const configurarTasa = async (req, res) => {
     const { data, error } = await supabase
         .from('global_config')
         .upsert([
-            { 
+            {
                 id: 1, // Siempre usaremos el ID 1 para la configuración global
-                tasa_dolar: tasa, 
-                updated_at: new Date() 
+                tasa_dolar: tasa,
+                updated_at: new Date()
             }
         ])
         .select();
@@ -231,4 +274,16 @@ const configurarTasa = async (req, res) => {
     });
 };
 
-module.exports = { recargarSaldo, transferirSaldo, obtenerHistorial, configurarTasa };
+exports.calcularComisionCpp = (req, res) => {
+    console.log("🟢 La petición llegó al controlador!");
+    // Respondemos inmediatamente sin hacer nada más
+    return res.json({ mensaje: "¡ESTOY VIVO!" });
+};
+
+module.exports = {
+    recargarSaldo,
+    transferirSaldo,     // Esta es la que acabas de modificar con C++
+    obtenerHistorial,
+    configurarTasa,
+    calcularComisionCpp
+};
