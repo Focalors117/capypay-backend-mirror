@@ -217,15 +217,35 @@ const obtenerHistorial = async (req, res) => {
         if(errRecargas) console.error("Error obteniendo recargas:", errRecargas);
 
         // C. Formatear y Unificar
-        const historialTxs = (listaDePagos || []).map(t => ({
-            id: t.id,
-            tipo: t.emisor_id === usuarioId ? 'PAGO ENVIADO' : 'PAGO RECIBIDO',
-            monto: t.amount,
-            comision: t.comision || 0,
-            descripcion: t.concept,
-            fecha: t.created_at,
-            es_negativo: t.emisor_id === usuarioId
-        }));
+        // Usamos flatMap para desdoblar transacciones que tengan comisión en 2 filas
+        const historialTxs = (listaDePagos || []).flatMap(t => {
+            const esEmisor = t.emisor_id === usuarioId;
+            const comision = parseFloat(t.comision_bs || 0);
+            
+            // 1. La transacción principal
+            const movimientos = [{
+                id: t.id,
+                tipo: esEmisor ? 'PAGO ENVIADO' : 'PAGO RECIBIDO',
+                monto: t.amount,
+                descripcion: t.concept,
+                fecha: t.created_at,
+                es_negativo: esEmisor
+            }];
+
+            // 2. Si soy el emisor y hubo comisión, agrego el movimiento de comisión aparte
+            if (esEmisor && comision > 0) {
+                movimientos.unshift({ // unshift para que salga antes (o después según sort)
+                    id: `${t.id}-comision`, // ID sintético único
+                    tipo: 'COMISIÓN SERVICIO',
+                    monto: comision,
+                    descripcion: 'Comisión por transferencia',
+                    fecha: t.created_at, // Misma fecha
+                    es_negativo: true
+                });
+            }
+
+            return movimientos;
+        });
 
         const historialRecargas = (recargas || []).map(r => ({
             id: r.id,

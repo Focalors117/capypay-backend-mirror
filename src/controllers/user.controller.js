@@ -1,5 +1,8 @@
 const supabase = require('../config/supabase'); 
 const bcrypt = require('bcryptjs'); 
+const jwt = require('jsonwebtoken');
+
+const JWT_SECRET = process.env.JWT_SECRET || 'secreto_super_seguro_capypay_2026';
 
 // 1. REGISTRAR USUARIO (Adaptado a la FOTO de tu DB)
 const registrarUsuario = async (req, res) => {
@@ -69,12 +72,20 @@ const loginUsuario = async (req, res) => {
             return res.status(401).json({ error: "Contraseña incorrecta" });
         }
 
+        // Generar Token JWT real
+        const token = jwt.sign(
+            { id: usuario.id, email: usuario.email }, 
+            JWT_SECRET, 
+            { expiresIn: '24h' }
+        );
+
         res.status(200).json({
             mensaje: "Login exitoso",
+            token: token,            // <--- Token real
             usuarioId: usuario.id,
-            nombre: usuario.name,    // Ojo: ahora es usuario.name
-            cedula: usuario.cedula,  // Devolvemos la cédula también
-            balance: usuario.balance // Ojo: ahora es usuario.balance
+            nombre: usuario.name,    
+            cedula: usuario.cedula,  
+            balance: usuario.balance 
         });
 
     } catch (err) {
