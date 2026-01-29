@@ -1,12 +1,14 @@
 const supabase = require('./config/supabase');
 const express = require('express');
+const cors = require('cors');
 const app = express(); // Crear una instancia de la aplicación Express
 const PORT = 3000;
 
 const userRoutes = require('./routes/user.routes'); // Importar las rutas de usuario
-
 const transaccionRoutes = require('./routes/transaccion.routes');
+const notificationRoutes = require('./routes/notification.routes');
 
+app.use(cors());
 app.use(express.json()); // Middleware para parsear JSON en las solicitudes
 
 
@@ -14,8 +16,8 @@ app.use(express.json()); // Middleware para parsear JSON en las solicitudes
 //todas las rutas que definamos en userRoutes van a empezar con /api
 // Ejemplo: http://localhost:3000/api/registro
 app.use('/api', userRoutes);
-
 app.use('/api', transaccionRoutes);
+app.use('/api', notificationRoutes);
 
 //ruta de prueba para ver si el servidor vive/enciende
 

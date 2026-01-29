@@ -3,10 +3,10 @@ const path = require('path');
 
 const calcularComisionCpp = (monto, tipoUsuario) => {
     return new Promise((resolve, reject) => {
-        // __dirname es la carpeta actual (services).
-        // '..' significa subir un nivel (a la raíz del proyecto) para buscar el .exe
+        // __dirname es la carpeta actual (src/services).
+        // Necesitamos subir dos niveles para llegar a la raíz (capypay-backend)
         const nombreEjecutable = process.platform === 'win32' ? 'calcular_comision.exe' : 'calcular_comision';
-        const ruta = path.join(__dirname, '..', nombreEjecutable);
+        const ruta = path.join(__dirname, '..', '..', nombreEjecutable);
 
         // Convertimos monto a string porque C++ recibe puro texto en los argumentos
         const args = [String(monto), tipoUsuario];
