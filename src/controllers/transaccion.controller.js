@@ -52,6 +52,16 @@ const recargarSaldo = async (req, res) => {
             }])
             .select();
 
+        // 5. Asignar XP (Gamificación: +10 XP por Recarga)
+        try {
+             // Simulamos incremento (en producción usarías una funcion RPC de base de datos)
+             const nuevaXP = (usuario.xp || 0) + 10;
+             await supabase.from('profiles').update({ xp: nuevaXP }).eq('id', usuario.id);
+             console.log(`XP asignada a ${usuario.name}: +10 XP`);
+        } catch (xpErr) {
+             console.error("Error sumando XP:", xpErr);
+        }
+
         res.status(200).json({
             mensaje: `Recarga exitosa a ${usuario.name}`,
             nuevo_saldo: nuevoSaldo,
@@ -165,6 +175,15 @@ const transferirSaldo = async (req, res) => {
              } catch (notifError) {
                  console.error("Error creating notification (non-blocking):", notifError);
              }
+        }
+
+        // H. Asignar XP al Emisor (+5 XP por Transferencia)
+        try {
+            const nuevaXP = (emisor.xp || 0) + 5;
+            await supabase.from('profiles').update({ xp: nuevaXP }).eq('id', emisor.id);
+            console.log(`XP asignada a emisor ${emisor.name}: +5 XP`);
+        } catch (xpErr) {
+            console.error("Error sumando XP en transferencia:", xpErr);
         }
 
         res.status(200).json({

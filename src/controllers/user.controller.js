@@ -26,7 +26,7 @@ const registrarUsuario = async (req, res) => {
                     cedula: cedula,        // En la DB se llama 'cedula'
                     user_type: tipo,       // En la DB se llama 'user_type'
                     balance: 0,            // En la DB se llama 'balance'
-                    // OJO: Dile a tu compa que agregue esta columna 'password' a la tabla
+                    xp: 0,                // En la DB se llama 'xp'
                     password: hashedPassword 
                 }
             ])
@@ -85,7 +85,8 @@ const loginUsuario = async (req, res) => {
             usuarioId: usuario.id,
             nombre: usuario.name,    
             cedula: usuario.cedula,  
-            balance: usuario.balance 
+            balance: usuario.balance,
+            xp: usuario.xp
         });
 
     } catch (err) {
@@ -114,7 +115,8 @@ const verPerfil = async (req, res) => {
             email: usuario.email,
             cedula: usuario.cedula,
             tipo: usuario.user_type,
-            balance: usuario.balance
+            balance: usuario.balance,
+            xp: usuario.xp
         });
 
     } catch (err) {
