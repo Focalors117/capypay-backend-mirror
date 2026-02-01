@@ -7,6 +7,8 @@ const PORT = 3000;
 const userRoutes = require('./routes/user.routes'); // Importar las rutas de usuario
 const transaccionRoutes = require('./routes/transaccion.routes');
 const notificationRoutes = require('./routes/notification.routes');
+const rankingRoutes = require('./routes/ranking.routes');
+const comedorRoutes = require('./routes/comedor.routes');
 
 app.use(cors());
 app.use(express.json()); // Middleware para parsear JSON en las solicitudes
@@ -18,6 +20,8 @@ app.use(express.json()); // Middleware para parsear JSON en las solicitudes
 app.use('/api', userRoutes);
 app.use('/api', transaccionRoutes);
 app.use('/api', notificationRoutes);
+app.use('/api/ranking', rankingRoutes);
+app.use('/api/comedor', comedorRoutes);
 
 //ruta de prueba para ver si el servidor vive/enciende
 
