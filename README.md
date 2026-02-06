@@ -8,4 +8,4 @@ porque como supuse se iba a duplicar con el trigger que esta en la DB (porfavor 
 si debo ajustar en la DB o aqui en el backend, no le di muchas vueltas para poder hacer funcionar las cosas rapido.
 
 - *Nueva funcion "obtenerTasa": se creo para exponer publicamente la tasa del dolar actual a la app, permitiendo que la calculadora de recargas muestre datos reales.
-- Inclui algunos logs en consola para poder ver los errores / respuesta del backend
+- Inclui algunos logs en consola para poder ver los errores / respuesta del backend.
