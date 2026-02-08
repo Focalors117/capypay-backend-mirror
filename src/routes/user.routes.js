@@ -34,6 +34,9 @@ router.get('/buscar', userController.buscarUsuarios);
 router.put('/contactos/:id/favorite', userController.toggleFavorito);
 // Payload: { is_favorite: true/false }
 
+router.put('/contactos/:id', userController.actualizarContacto);
+// Payload: { alias: "Nuevo Alias" }
+
 router.put('/usuario/:id/pin', userController.actualizarPin);
 // Payload: { pin: "1234" }
 

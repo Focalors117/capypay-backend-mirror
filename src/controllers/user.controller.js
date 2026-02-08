@@ -72,6 +72,15 @@ const loginUsuario = async (req, res) => {
             return res.status(401).json({ error: "Contraseña incorrecta" });
         }
 
+        // Actualizar último acceso
+        const now = new Date().toISOString();
+        const { error: updateError } = await supabase
+            .from('profiles')
+            .update({ last_login: now })
+            .eq('id', usuario.id);
+
+        if (updateError) console.error("Error actualizando last_login:", updateError);
+
         // Generar Token JWT real
         const token = jwt.sign(
             { id: usuario.id, email: usuario.email }, 
@@ -86,7 +95,8 @@ const loginUsuario = async (req, res) => {
             nombre: usuario.name,    
             cedula: usuario.cedula,  
             balance: usuario.balance,
-            xp: usuario.xp
+            xp: usuario.xp,
+            last_login: now
         });
 
     } catch (err) {
@@ -345,6 +355,29 @@ const toggleFavorito = async (req, res) => {
     }
 };
 
+// 9. ACTUALIZAR CONTACTO (Alias)
+const actualizarContacto = async (req, res) => {
+    try {
+        const { id } = req.params; // ID de la tabla contacts
+        const { alias } = req.body;
+
+        const { data, error } = await supabase
+            .from('contacts')
+            .update({ alias: alias })
+            .eq('id', id)
+            .select();
+
+        if (error) {
+             return res.status(400).json({ error: error.message });
+        }
+
+        res.status(200).json({ message: "Contacto actualizado", data });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Error interno" });
+    }
+};
+
 module.exports = { 
     registrarUsuario, 
     loginUsuario, 
@@ -354,5 +387,6 @@ module.exports = {
     eliminarContacto, 
     buscarUsuarios,
     toggleFavorito,
-    actualizarPin
+    actualizarPin,
+    actualizarContacto
 };
