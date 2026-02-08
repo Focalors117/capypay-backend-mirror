@@ -16,15 +16,18 @@ const getMenu = async (req, res) => {
             return res.status(500).json({ error: error.message });
         }
 
-        // Logic to separate "Plato del Dia" vs Normal Items
-        // Strategy: First item with 'is_featured' is Plato del Dia, rest are carousel items
-        // If no 'is_featured', just take the first one.
+        // Logic to separate "Plato del Dia", "Popular" and "Carousel"
+        // Strategy: 
+        // 1. Plato del Dia: First item with 'is_featured'
+        // 2. Popular: Top 3-5 items by sales_count (if available)
+        // 3. Carousel: Rest of the items
         
-        // Mocking transformation if database structure is simple
         let platoDia = null;
+        let popularItems = [];
         let carouselItems = [];
 
         if (data && data.length > 0) {
+            // 1. Plato del Dia
             const featured = data.find(i => i.is_featured) || data[0];
             platoDia = {
                 id: featured.id,
@@ -32,19 +35,19 @@ const getMenu = async (req, res) => {
                 description: featured.description,
                 price: featured.price,
                 image_url: featured.image_url,
-                is_featured: true
+                is_featured: true,
+                sales_count: featured.sales_count || 0
             };
             
-            // Carousel uses the rest, or all (minus the featured one if you prefer unique)
-            carouselItems = data.filter(i => i.id !== platoDia.id).map(i => ({
-                id: i.id,
-                name: i.name,
-                description: i.description,
-                price: i.price,
-                image_url: i.image_url
-            }));
+            // 2. Popular Items (Scalable Logic: Sort by sales_count from DB)
+            // We clone the array to not affect other filters
+            popularItems = [...data]
+                .sort((a, b) => (b.sales_count || 0) - (a.sales_count || 0))
+                .slice(0, 5); // Top 5
             
-            // If only 1 item exists, put it in carousel too so it's not empty?
+            // 3. Carousel (All items, or exclude Plato del Dia if preferred, let's keep all for variety)
+            carouselItems = data.filter(i => i.id !== platoDia.id);
+            
             if (carouselItems.length === 0) {
                 carouselItems.push(platoDia);
             }
@@ -52,6 +55,7 @@ const getMenu = async (req, res) => {
 
         res.json({
             platoDia: platoDia,
+            popularItems: popularItems,
             items: carouselItems
         });
 
@@ -64,37 +68,115 @@ const getMenu = async (req, res) => {
 // GET /api/comedor/stats
 const getStats = async (req, res) => {
     try {
-        // We use 'head: true' and 'count: exact' to just count rows without fetching data
+        // 1. Get Count of Preparing Orders
         const { count, error } = await supabase
             .from('orders')
             .select('*', { count: 'exact', head: true })
             .eq('status', 'preparing'); 
 
-        const activeOrders = count || 0;
-        const occupancyPercent = Math.min(100, activeOrders * 5); // 5% per active order
-        const waitMins = activeOrders * 3; // 3 mins per order
+        if (error) throw error;
 
-        // Determine Level string
-        let nivel = 'Baja';
-        if (occupancyPercent > 80) nivel = 'Alta';
-        else if (occupancyPercent > 40) nivel = 'Media';
+        // 2. Real Wait Time Calculation (Moving Average)
+        // Fetch last 50 completed orders to calculate average prep time
+        const { data: pastOrders } = await supabase
+            .from('orders')
+            .select('created_at, completed_at')
+            .eq('status', 'completed')
+            .not('completed_at', 'is', null)
+            .order('completed_at', { ascending: false })
+            .limit(50);
+        
+        let avgMinutes = 5; 
+        if (pastOrders && pastOrders.length > 5) {
+            const totalMinutes = pastOrders.reduce((acc, order) => {
+                const start = new Date(order.created_at);
+                const end = new Date(order.completed_at);
+                // Sanity Check: If diff is insane (e.g. > 2 hours/120min) ignore it (maybe left overnight)
+                // Also ignore negative times
+                const diff = (end - start) / 60000;
+                if(diff > 0 && diff < 60) return acc + diff;
+                return acc + 5; // fallback weight
+            }, 0);
+            avgMinutes = Math.ceil(totalMinutes / pastOrders.length);
+        }
+        
+        // Safety Clamp: Don't scare users with 3000 min
+        avgMinutes = Math.max(2, Math.min(avgMinutes, 15)); // Min 2 min, Max 15 min per plate avg
+
+        const activeOrders = count || 0;
+        const totalWaitMins = activeOrders * avgMinutes;
+        
+        // Cap total wait time display to 60 mins to seem manageable (UI logic handles "Very High")
+        const displayWaitMin = Math.min(totalWaitMins, 120); 
+
+        // Determine Level string based on Wait Time, not just count
+        let nivel = 'Normal';
+        const occupancyRate = Math.min(100, (activeOrders / 30) * 100); // 30 capacity base
+        
+        if (occupancyRate > 75) nivel = 'Full';
+        else if (occupancyRate > 50) nivel = 'Alta';
+        else if (occupancyRate > 25) nivel = 'Media';
+        else nivel = 'Baja';
+
+        // 3. Get Oldest Order (Next to be served)
+        const { data: nextOrders } = await supabase
+            .from('orders')
+            .select('id')
+            .eq('status', 'preparing')
+            .order('created_at', { ascending: true })
+            .limit(1);
+
+        // Format Next Ticket
+        let proximoTurno = 'Sin cola';
+        if (nextOrders && nextOrders.length > 0) {
+            const id = String(nextOrders[0].id);
+            proximoTurno = id.length > 10 ? `Ticket #${id.slice(0,4)}` : `Ticket #${id}`;
+        }
+
+        // 4. Calculate Position (If orderId provided)
+        let turnsAhead = null;
+        if (req.query.orderId) {
+            const { data: targetOrder } = await supabase
+                .from('orders')
+                .select('created_at')
+                .eq('id', req.query.orderId)
+                .single();
+
+            if (targetOrder) {
+                const { count: aheadCount } = await supabase
+                    .from('orders')
+                    .select('*', { count: 'exact', head: true })
+                    .eq('status', 'preparing')
+                    .lt('created_at', targetOrder.created_at);
+                
+                turnsAhead = aheadCount;
+            }
+        }
+        
+        // Smart Message Logic
+        let detalleMsg = "Sin cola, excelente momento";
+        if (activeOrders > 0) detalleMsg = "Flujo constante";
+        if (activeOrders > 10) detalleMsg = "Tráfico alto en cocina";
+        if (activeOrders > 25) detalleMsg = "Comedor a máxima capacidad";
 
         res.json({
             ocupacion: {
                 nivel: nivel,
-                porcentaje: occupancyPercent,
-                detalle: `${activeOrders} pedidos en cola`
+                porcentaje: occupancyRate, // Improved calc
+                detalle: detalleMsg,
+                count: activeOrders 
             },
-            tiempoEspera: waitMins > 0 ? `${waitMins} min` : 'Sin espera',
-            proximoTurno: 'Ticket #--' // Could be dynamic if we implemented ticketing
+            tiempoEspera: totalWaitMins > 0 ? `${displayWaitMin}-${displayWaitMin + 5} min` : '5-10 min',
+            proximoTurno: proximoTurno,
+            turnsAhead: turnsAhead // Return the calculated position
         });
     } catch (err) {
         console.error(err);
         // Fallback response so frontend doesn't break
         res.json({
-            ocupacion: { nivel: 'Baja', porcentaje: 5, detalle: 'Sistema Offline' },
-            tiempoEspera: '5 min',
-            proximoTurno: 'A-001'
+            ocupacion: { nivel: 'Desconocido', porcentaje: 0, detalle: 'Error de conexión' },
+            tiempoEspera: '-- min',
+            proximoTurno: '---'
         });
     }
 };
@@ -108,9 +190,10 @@ const createOrder = async (req, res) => {
     }
 
     try {
-        // 1. Calculate Total & Check Stock
+        // 1. Calculate Total & Prepare atomic data
         let total = 0;
-        const orderItemsData = [];
+        let isFeatured = false;
+        const atomicItems = [];
 
         // Fetch prices (to avoid client trust)
         const itemIds = items.map(i => i.id);
@@ -122,80 +205,76 @@ const createOrder = async (req, res) => {
         if (menuErr || !menuItems) return res.status(500).json({ error: "Error fetching menu" });
 
         for (const itemRequest of items) {
-            // Use loose equality or string conversion for ID matching (Postgres returns numbers, JSON sends strings)
             const product = menuItems.find(p => String(p.id) === String(itemRequest.id));
-            
             if (!product) return res.status(400).json({ error: `Item ${itemRequest.id} not found` });
+            
+            // Note: Availability check is done inside the Atomic function now (Double check)
             if (product.stock < itemRequest.quantity) return res.status(400).json({ error: `Not enough stock for ${product.name}` });
+            
+            if (product.is_featured) isFeatured = true;
 
-            total += parseFloat(product.price) * itemRequest.quantity;
-            orderItemsData.push({
-                menu_item_id: product.id,
+            const itemTotal = parseFloat(product.price) * itemRequest.quantity;
+            total += itemTotal;
+
+            atomicItems.push({
+                id: product.id,
                 quantity: itemRequest.quantity,
-                price_at_time: product.price
+                price: product.price,
+                name: product.name 
             });
         }
 
-        // 2. Check User Balance
-        const { data: user, error: userErr } = await supabase
-            .from('profiles')
-            .select('balance, xp')
-            .eq('id', user_id)
-            .single();
+        // 1.5 Calculate Commission (5% Service Fee)
+        // Matches frontend logic to ensure consistency
+        const commission = Math.round(total * 0.05);
+        total += commission;
 
-        if (userErr || !user) return res.status(404).json({ error: "User not found" });
+        // 2. Calculate XP vs Ranking Points
+        
+        // XP (Profile Level) -> 10% of total
+        const xpGained = Math.ceil(total * 0.1); 
 
-        if (user.balance < total) {
-            return res.status(400).json({ error: "Saldo insuficiente" });
+        // Ranking Points (Competition) -> Base + Frequency + Volume + Bonus
+        let pointsGained = 20; // Base for Frequency
+        pointsGained += Math.ceil(total * 0.05); // Volume (5%)
+        
+        if (isFeatured) {
+            pointsGained *= 2; // X2 Multiplier for Featured Dish
         }
 
-        // 3. Deduct Balance
-        const newBalance = user.balance - total;
-        // 4. Add XP (10% of total spent?)
-        const xpGained = Math.floor(total * 0.1);
-        const newXP = (user.xp || 0) + xpGained;
+        pointsGained = Math.floor(pointsGained);
 
-        const { error: updateErr } = await supabase
-            .from('profiles')
-            .update({ balance: newBalance, xp: newXP })
-            .eq('id', user_id);
+        // 3. ATOMIC TRANSACTION (RPC)
+        const { data: result, error: rpcError } = await supabase
+            .rpc('create_order_atomic', {
+                p_user_id: user_id,
+                p_items: atomicItems,
+                p_total: total,
+                p_xp_gained: xpGained,
+                p_points_gained: pointsGained
+            });
 
-        if (updateErr) throw updateErr;
+        if (rpcError) throw rpcError;
 
-        // 5. Create Order
-        const { data: order, error: orderErr } = await supabase
-            .from('orders')
-            .insert([{ user_id, total, status: 'preparing' }])
-            .select()
-            .single();
-
-        if (orderErr) throw orderErr;
-
-        // 6. Create Order Items
-        const itemsToInsert = orderItemsData.map(i => ({ ...i, order_id: order.id }));
-        const { error: itemsErr } = await supabase.from('order_items').insert(itemsToInsert);
-
-        if (itemsErr) throw itemsErr;
-
-        // 7. Update Stock (Simple loop)
-        for (const i of items) {
-             // In real app, use RPC for atomic decrement
-             const product = menuItems.find(p => String(p.id) === String(i.id));
-             if (product) {
-                 await supabase.from('menu_items').update({ stock: product.stock - i.quantity }).eq('id', i.id);
-             }
-        }
+        // result is [{ order_id: "...", success: true }]
+        const orderId = result && result[0] ? result[0].order_id : null;
 
         res.status(201).json({ 
             message: "Pedido realizado con éxito", 
-            orderId: order.id, 
-            newBalance,
-            xpGained 
+            orderId: orderId, 
+            xpGained,
+            pointsGained,
+            stats: { 
+                level_xp: xpGained,
+                ranking_points: pointsGained
+            }
         });
 
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Transaction Failed" });
+        console.error("Order Error:", err);
+        // Better error message handling
+        const msg = err.message || "Transaction Failed";
+        res.status(400).json({ error: msg });
     }
 };
 
@@ -249,10 +328,36 @@ const getUserOrders = async (req, res) => {
     }
 }
 
+// DEV ONLY: Complete all active orders (Simular Cocina)
+const completeAllOrders = async (req, res) => {
+    try {
+        const { data, error } = await supabase
+            .from('orders')
+            .update({ 
+                status: 'completed', 
+                completed_at: new Date().toISOString() 
+            })
+            .eq('status', 'preparing')
+            .select();
+
+        if (error) throw error;
+
+        res.json({ 
+            message: "✅ ¡Cocina limpiada! Todas las órdenes están listas.", 
+            count: data.length,
+            ids: data.map(o => o.id)
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: err.message });
+    }
+};
+
 module.exports = {
     getMenu,
     getStats,
     createOrder,
     getOrder,
-    getUserOrders
+    getUserOrders,
+    completeAllOrders
 };

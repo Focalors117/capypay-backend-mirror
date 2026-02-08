@@ -15,11 +15,11 @@ const getRanking = async (req, res) => {
     try {
         const { user_id } = req.query; 
 
-        // 1. Fetch Top 50 Users
+        // 1. Fetch Top 50 Users (Ordered by RANKING POINTS, not XP)
         const { data: allUsers, error } = await supabase
             .from('profiles')
-            .select('id, name, xp, faculty, career') 
-            .order('xp', { ascending: false })
+            .select('id, name, ranking_points, xp, faculty, career') 
+            .order('ranking_points', { ascending: false })
             .limit(50);
 
         if (error) throw error;
@@ -28,7 +28,8 @@ const getRanking = async (req, res) => {
         const formattedList = allUsers.map((u, index) => ({
             rank: index + 1,
             name: u.name,
-            points: u.xp,
+            points: u.ranking_points || 0, // Using Competition Points now
+            level_xp: u.xp, // We can send this too if needed context
             avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(u.name)}&background=random&color=fff`,
             faculty: u.faculty || 'General',
             career: u.career || 'Estudiante',
@@ -40,35 +41,35 @@ const getRanking = async (req, res) => {
         let rivalData = { rank: '-', avatar: '' };
 
         if (user_id) {
-            // Si el usuario no está en top 50, deberíamos buscarlo aparte, pero por simplicidad de MVP:
+            // Buscamos en la lista descargada
             const found = formattedList.find(u => u.id === user_id);
             if (found) {
                 userData = found;
-                const rivalIndex = found.rank - 2; // Rank 1 is index 0. Rival of Rank 5 (idx 4) is Rank 4 (idx 3)
-                if (rivalIndex >= 0) rivalData = formattedList[rivalIndex];
+                if (found.rank > 1) {
+                    rivalData = formattedList[found.rank - 2];
+                }
             } else {
                  // Fetch isolated if not in top 50
-                 const { data: singleUser } = await supabase.from('profiles').select('name, xp, faculty').eq('id', user_id).single();
+                 const { data: singleUser } = await supabase.from('profiles').select('name, ranking_points, faculty').eq('id', user_id).single();
                  if (singleUser) {
                       userData = { 
                           rank: '>50', 
                           name: singleUser.name, 
-                          points: singleUser.xp,
+                          points: singleUser.ranking_points || 0,
                           avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(singleUser.name)}&background=random&color=fff`
                       };
                  }
             }
         }
 
-        // 2. Faculty Battle Logic (Aggregation)
-        // Note: For large scale, cache this or use a View.
-        const { data: allProfiles } = await supabase.from('profiles').select('faculty, xp');
+        // 2. Faculty Battle Logic (Aggregation by Competition Points)
+        const { data: allProfiles } = await supabase.from('profiles').select('faculty, ranking_points');
         
         const facultyStats = {};
         allProfiles?.forEach(p => {
              const f = p.faculty || 'Sin Facultad';
              if (!facultyStats[f]) facultyStats[f] = { name: f, xp: 0, members: 0 };
-             facultyStats[f].xp += (p.xp || 0);
+             facultyStats[f].xp += (p.ranking_points || 0); // Aggregate Tournament Points
              facultyStats[f].members++;
         });
 
