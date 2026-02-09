@@ -123,12 +123,15 @@ const transferirSaldo = async (req, res) => {
 
         /* Cálculo de Comisión externo vía servicio C++ */
         const tipoUsuario = emisor.user_type || 'comun';
-        console.log(`Calculando comisión (C++) para: ${tipoUsuario}...`);
         
-        const comision = await calcularComisionService(monto, tipoUsuario);
+        // --- CAMBIO: Comisiones desactivadas para transferencias entre usuarios ---
+        // console.log(`Calculando comisión (C++) para: ${tipoUsuario}...`);
+        // const comision = await calcularComisionService(monto, tipoUsuario);
+        
+        const comision = 0; // Comisión forzada a 0 para P2P
         const totalADescontar = parseFloat(monto) + comision;
 
-        console.log(`Monto: ${monto}, Comisión: ${comision}, Total a descontar: ${totalADescontar}`);
+        console.log(`Monto: ${monto}, Comisión inv (P2P): ${comision}, Total a descontar: ${totalADescontar}`);
 
         // D. Verificar Saldo
         if (emisor.balance < totalADescontar) {
