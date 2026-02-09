@@ -27,8 +27,13 @@ const getMenu = async (req, res) => {
         let carouselItems = [];
 
         if (data && data.length > 0) {
-            // 1. Plato del Dia
-            const featured = data.find(i => i.is_featured) || data[0];
+            // 1. Plato del Dia (PRIORIDAD: Comida Gratuita / Precio 0 / 'Bandeja')
+            // Buscamos un item con precio 0.
+            const freeItem = data.find(i => parseFloat(i.price) === 0 || i.price === 0);
+            
+            // Si existe gratis, ese es el plato del día. Si no, el featured o el primero.
+            const featured = freeItem || data.find(i => i.is_featured) || data[0];
+
             platoDia = {
                 id: featured.id,
                 name: featured.name,
@@ -39,18 +44,22 @@ const getMenu = async (req, res) => {
                 sales_count: featured.sales_count || 0
             };
             
-            // 2. Popular Items (Scalable Logic: Sort by sales_count from DB)
-            // We clone the array to not affect other filters
+            // 2. Popular Items
             popularItems = [...data]
                 .sort((a, b) => (b.sales_count || 0) - (a.sales_count || 0))
                 .slice(0, 5); // Top 5
             
-            // 3. Carousel (All items, or exclude Plato del Dia if preferred, let's keep all for variety)
+            // 3. Carousel (All items, or exclude Plato del Dia)
             carouselItems = data.filter(i => i.id !== platoDia.id);
             
             if (carouselItems.length === 0) {
                 carouselItems.push(platoDia);
             }
+        } else {
+            // Caso DB vacía (sin items)
+            platoDia = null;
+            popularItems = [];
+            carouselItems = [];
         }
 
         res.json({

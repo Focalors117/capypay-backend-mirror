@@ -235,6 +235,14 @@ const obtenerHistorial = async (req, res) => {
 
         if(errRecargas) console.error("Error obteniendo recargas:", errRecargas);
 
+        // B.5. Órdenes de Comedor (NUEVO)
+        const { data: ordenes, error: errOrdenes } = await supabase
+            .from('orders')
+            .select('*, order_items(quantity, price_at_time)')
+            .eq('user_id', usuarioId);
+
+        if(errOrdenes) console.error("Error obteniendo ordenes:", errOrdenes);
+
         // C. Formatear y Unificar
         // Usamos flatMap para desdoblar transacciones que tengan comisión en 2 filas
         const historialTxs = (listaDePagos || []).flatMap(t => {
@@ -275,7 +283,30 @@ const obtenerHistorial = async (req, res) => {
             es_negativo: false
         }));
 
-        const historialCompleto = [...historialTxs, ...historialRecargas].sort((a, b) => {
+        const historialOrdenes = (ordenes || []).map(o => {
+             // Fallback: Calcular total si no existe en la columna principal
+             let finalAmount = parseFloat(o.total || o.total_price || o.amount || 0);
+
+             if (finalAmount === 0 && o.order_items && o.order_items.length > 0) {
+                 const subtotal = o.order_items.reduce((acc, i) => {
+                     const p = parseFloat(i.price_at_time || 0); // Removed i.price check
+                     return acc + (p * (i.quantity || 1));
+                 }, 0);
+                 // Estimación de comisión si no está guardada (5%)
+                 if (subtotal > 0) finalAmount = subtotal + Math.round(subtotal * 0.05);
+             }
+
+             return {
+                id: o.id,
+                tipo: 'CONSUMO',
+                monto: finalAmount,
+                descripcion: 'Pedido Comedor',
+                fecha: o.created_at,
+                es_negativo: true
+            };
+        });
+
+        const historialCompleto = [...historialTxs, ...historialRecargas, ...historialOrdenes].sort((a, b) => {
             return new Date(b.fecha) - new Date(a.fecha);
         });
 
