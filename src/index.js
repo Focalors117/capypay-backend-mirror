@@ -2,7 +2,7 @@ const supabase = require('./config/supabase');
 const express = require('express');
 const cors = require('cors');
 const app = express(); // Crear una instancia de la aplicación Express
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 const userRoutes = require('./routes/user.routes'); // Importar las rutas de usuario
 const transaccionRoutes = require('./routes/transaccion.routes');
@@ -33,3 +33,5 @@ app.listen(PORT, () => {
     console.log(`Servidor corriendo en el puerto ${PORT}`);
     console.log(`Ruta de registro lista en: http://localhost:${PORT}/api/registro`);
 });
+
+module.exports = app;
